@@ -166,7 +166,7 @@
               v-for="(output, outputIndex) in log.outputs"
               :key="outputIndex"
               class="text-gray-300 whitespace-pre-wrap">
-              {{ output }}
+              <span v-html="renderOutput(output)"></span>
             </div>
           </div>
         </div>
@@ -220,6 +220,8 @@ import {
   Loader as LoaderIcon,
 } from 'lucide-vue-next'
 import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+
+import { renderOutput } from '@/utils'
 
 const serverStore = useServerStore()
 const terminalStore = useTerminalStore()

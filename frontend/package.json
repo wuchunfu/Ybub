@@ -19,6 +19,7 @@
     "@yuelioi/utils": "^1.0.8",
     "@yuelioi/yami": "^1.0.6",
     "@yuelioi/yui": "^0.0.5",
+    "ansi-to-html": "^0.7.2",
     "axios": "^1.12.2",
     "cron-parser": "^5.4.0",
     "cronstrue": "^3.3.0",

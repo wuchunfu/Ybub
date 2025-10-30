@@ -89,10 +89,10 @@ func (s *SSHService) ExecCommand(server models.Server, commandID string, command
 	go func() {
 		s.streamOutput(stdout, func(line string) {
 			// !临时调试
-			log.Debug().
-				Str("server", server.Name).
-				Str("id", commandID).
-				Msgf("[STDOUT] %s", line)
+			// log.Debug().
+			// 	Str("server", server.Name).
+			// 	Str("id", commandID).
+			// 	Msgf("[STDOUT] %s", line)
 			s.Emitter.EmitSshOutput(commandID, "stdout", line)
 		})
 		close(done)

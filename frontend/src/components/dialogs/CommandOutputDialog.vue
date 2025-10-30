@@ -18,7 +18,7 @@
               v-for="(output, outputIndex) in commandOutput.outputs"
               :key="outputIndex"
               class="text-gray-300 whitespace-pre-wrap">
-              {{ output }}
+              <div v-html="renderOutput(output)"></div>
             </div>
           </div>
         </div>
@@ -34,6 +34,8 @@
 <script setup lang="ts">
 import type { DockerOutput } from '@/types'
 import { X as XIcon } from 'lucide-vue-next'
+
+import { renderOutput } from '@/utils'
 
 defineProps<{
   open: boolean
