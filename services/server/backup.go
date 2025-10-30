@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sync"
 	"time"
 	"ybub/models"
 
@@ -14,9 +15,67 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	// 最大并发下载数
+	maxConcurrentDownloads = 5
+)
+
+// downloadTask 下载任务
+type downloadTask struct {
+	remotePath string
+	localPath  string
+}
+
 // downloadDirectory 递归下载远程目录
 func (s *SSHService) downloadDirectory(sftpClient *sftp.Client, remotePath, localPath, projectID string) error {
-	// 读取远程目录内容
+	// 收集所有需要下载的文件
+	tasks := make([]downloadTask, 0)
+	if err := s.collectDownloadTasks(sftpClient, remotePath, localPath, &tasks); err != nil {
+		return err
+	}
+
+	log.Info().
+		Int("fileCount", len(tasks)).
+		Msg("开始多线程下载文件")
+
+	// 创建任务通道和并发控制
+	taskChan := make(chan downloadTask, len(tasks))
+	errChan := make(chan error, len(tasks))
+	var wg sync.WaitGroup
+
+	// 启动工作协程池
+	for i := 0; i < maxConcurrentDownloads; i++ {
+		wg.Add(1)
+		go s.downloadWorker(sftpClient, taskChan, errChan, &wg, projectID)
+	}
+
+	// 发送下载任务
+	for _, task := range tasks {
+		taskChan <- task
+	}
+	close(taskChan)
+
+	// 等待所有下载完成
+	wg.Wait()
+	close(errChan)
+
+	// 收集错误
+	var errs []error
+	for err := range errChan {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("下载过程中发生 %d 个错误: %v", len(errs), errs[0])
+	}
+
+	return nil
+}
+
+// 递归收集所有需要下载的文件
+func (s *SSHService) collectDownloadTasks(sftpClient *sftp.Client, remotePath, localPath string, tasks *[]downloadTask) error {
 	entries, err := sftpClient.ReadDir(remotePath)
 	if err != nil {
 		return fmt.Errorf("读取远程目录失败 %s: %w", remotePath, err)
@@ -32,22 +91,38 @@ func (s *SSHService) downloadDirectory(sftpClient *sftp.Client, remotePath, loca
 				return fmt.Errorf("创建本地目录失败 %s: %w", localFile, err)
 			}
 
-			// 递归下载子目录
-			if err := s.downloadDirectory(sftpClient, remoteFile, localFile, projectID); err != nil {
+			// 递归收集子目录中的文件
+			if err := s.collectDownloadTasks(sftpClient, remoteFile, localFile, tasks); err != nil {
 				return err
 			}
 		} else {
-			// 下载文件
-			if err := s.downloadFile(sftpClient, remoteFile, localFile, projectID); err != nil {
-				return err
-			}
+			// 添加文件下载任务
+			*tasks = append(*tasks, downloadTask{
+				remotePath: remoteFile,
+				localPath:  localFile,
+			})
 		}
 	}
 
 	return nil
 }
 
-// downloadFile 下载单个文件
+// 下载工作协程
+func (s *SSHService) downloadWorker(sftpClient *sftp.Client, taskChan <-chan downloadTask, errChan chan<- error, wg *sync.WaitGroup, projectID string) {
+	defer wg.Done()
+
+	for task := range taskChan {
+		if err := s.downloadFile(sftpClient, task.remotePath, task.localPath, projectID); err != nil {
+			log.Error().
+				Err(err).
+				Str("remote", task.remotePath).
+				Msg("文件下载失败")
+			errChan <- err
+		}
+	}
+}
+
+// 下载单个文件
 func (s *SSHService) downloadFile(sftpClient *sftp.Client, remotePath, localPath, projectID string) error {
 	log.Debug().
 		Str("remote", remotePath).
@@ -79,7 +154,7 @@ func (s *SSHService) downloadFile(sftpClient *sftp.Client, remotePath, localPath
 		Int64("size", written).
 		Msg("文件下载完成")
 
-	// 发送进度事件
+	// 发送进度事件（确保 Emitter 是线程安全的）
 	s.Emitter.EmitBackupTaskProgress(projectID,
 		remotePath,
 		written,
@@ -161,9 +236,6 @@ func (s *SSHService) BackupProjectData(project models.Project) error {
 			Str("remotePath", remotePath).
 			Str("localPath", backupPath).
 			Msg("备份失败")
-		s.Emitter.EmitBackupTaskOutput(project.ID, models.StatusStarted,
-			fmt.Sprintf("开始备份 %s", project.Name),
-		)
 		s.Emitter.EmitBackupTaskOutput(project.ID,
 			models.StatusFailed,
 			fmt.Sprintf("备份失败: %v", err),
